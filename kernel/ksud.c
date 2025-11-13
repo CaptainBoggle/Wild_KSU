@@ -19,6 +19,9 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
+#include <linux/slab.h>
+#include <linux/sizes.h>
+#include <linux/string.h>
 
 #include "allowlist.h"
 #include "arch.h"
@@ -30,17 +33,17 @@
 static const char KERNEL_SU_RC[] =
 	"\n"
 	
-	"service zygote_secondary /system/bin/app_process32 -Xzygote /system/bin --zygote --socket-name=zygote_secondary --enable-lazy-preload\n"
-	"    class main\n"
-	"    priority -20\n"
-	"    user root\n"
-	"    group root readproc reserved_disk\n"
-	"    socket zygote_secondary stream 660 root system\n"
-	"    socket usap_pool_secondary stream 660 root system\n"
-	"    onrestart restart zygote\n"
-	"    task_profiles ProcessCapacityHigh MaxPerformance\n"
+	// "service zygote_secondary /system/bin/app_process32 -Xzygote /system/bin --zygote --socket-name=zygote_secondary --enable-lazy-preload\n"
+	// "    class main\n"
+	// "    priority -20\n"
+	// "    user root\n"
+	// "    group root readproc reserved_disk\n"
+	// "    socket zygote_secondary stream 660 root system\n"
+	// "    socket usap_pool_secondary stream 660 root system\n"
+	// "    onrestart restart zygote\n"
+	// "    task_profiles ProcessCapacityHigh MaxPerformance\n"
 
-	"\n"
+	// "\n"
 	
 	"on post-fs-data\n"
 	"    start logd\n"
@@ -49,10 +52,10 @@ static const char KERNEL_SU_RC[] =
 
 	"\n"
 	
-	"on zygote-start\n"
-	"    start zygote_secondary\n"
+	// "on zygote-start\n"
+	// "    start zygote_secondary\n"
 
-	"\n"
+	// "\n"
 
 	"on nonencrypted\n"
 	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
@@ -312,12 +315,143 @@ static struct file_operations fops_proxy;
 static ssize_t read_count_append = 0;
 static bool atrace_rc_inserted;
 static bool init_import_inserted;
+static bool vendor_build_modified;
+static bool replace_file_content;
+static struct file *replace_file_target;
+static bool vendor_payload_in_progress;
+static bool init_import_enabled = false;
+
+static bool ksu_line_has_prefix(const char *line, size_t len,
+				    const char *prefix)
+{
+	size_t prefix_len = strlen(prefix);
+	if (len < prefix_len) {
+		return false;
+	}
+	return !strncmp(line, prefix, prefix_len);
+}
+
+static char *ksu_generate_vendor_build_payload(struct file *file,
+					       size_t *out_len)
+{
+	char *orig = NULL;
+	char *out = NULL;
+	loff_t old_pos = file->f_pos;
+	loff_t pos = 0;
+	size_t file_size = i_size_read(file->f_path.dentry->d_inode);
+
+	if (!file_size || file_size > SZ_64K || vendor_payload_in_progress) {
+		return NULL;
+	}
+
+	vendor_payload_in_progress = true;
+
+	orig = kmalloc(file_size + 1, GFP_KERNEL);
+	if (!orig) {
+		goto out;
+	}
+
+	ssize_t read_bytes = kernel_read(file, orig, file_size, &pos);
+	if (read_bytes <= 0) {
+		goto out;
+	}
+	if (read_bytes > file_size) {
+		read_bytes = file_size;
+	}
+	size_t input_len = (size_t)read_bytes;
+	orig[input_len] = '\0';
+
+	out = kmalloc(input_len + 128, GFP_KERNEL);
+	if (!out) {
+		goto out;
+	}
+
+	size_t out_len_local = 0;
+	char *cursor = orig;
+	char *end = orig + input_len;
+	while (cursor < end) {
+		char *newline = memchr(cursor, '\n', end - cursor);
+		size_t line_len = newline ? (size_t)(newline - cursor) : (size_t)(end - cursor);
+		bool matched = false;
+
+		if (ksu_line_has_prefix(cursor, line_len, "ro.zygote=zygote64")) {
+			const char replacement[] = "ro.zygote=zygote64_32\n";
+			memcpy(out + out_len_local, replacement, sizeof(replacement) - 1);
+			out_len_local += sizeof(replacement) - 1;
+			matched = true;
+		} else if (ksu_line_has_prefix(cursor, line_len,
+					      "ro.vendor.product.cpu.abilist=arm64-v8a")) {
+			const char replacement[] =
+				"ro.vendor.product.cpu.abilist=arm64-v8a,armeabi-v7a,armeabi\n";
+			memcpy(out + out_len_local, replacement, sizeof(replacement) - 1);
+			out_len_local += sizeof(replacement) - 1;
+			matched = true;
+		} else if (ksu_line_has_prefix(cursor, line_len,
+						  "ro.vendor.product.cpu.abilist32=")) {
+			const char replacement[] =
+				"ro.vendor.product.cpu.abilist32=armeabi-v7a,armeabi\n";
+			memcpy(out + out_len_local, replacement, sizeof(replacement) - 1);
+			out_len_local += sizeof(replacement) - 1;
+			matched = true;
+		}
+
+		if (!matched) {
+			memcpy(out + out_len_local, cursor, line_len);
+			out_len_local += line_len;
+			if (newline) {
+				out[out_len_local++] = '\n';
+			}
+		}
+
+		cursor = newline ? newline + 1 : end;
+	}
+
+	*out_len = out_len_local;
+	file->f_pos = old_pos;
+	vendor_payload_in_progress = false;
+	kfree(orig);
+	return out;
+
+out:
+	file->f_pos = old_pos;
+	if (out) {
+		kfree(out);
+	}
+	if (orig) {
+		kfree(orig);
+	}
+	vendor_payload_in_progress = false;
+	return NULL;
+}
+
+static bool ksu_all_injections_done(void)
+{
+	bool init_done = init_import_inserted || !init_import_enabled;
+	return atrace_rc_inserted && init_done && vendor_build_modified;
+}
 
 static ssize_t read_proxy(struct file *file, char __user *buf, size_t count,
 			  loff_t *pos)
 {
 	bool first_read = file->f_pos == 0;
-	ssize_t ret = orig_read(file, buf, count, pos);
+	ssize_t ret = 0;
+	bool replace_active = replace_file_content && file == replace_file_target;
+
+	if (!replace_active && orig_read) {
+		ret = orig_read(file, buf, count, pos);
+	}
+
+	if (replace_active) {
+		if (first_read) {
+			pr_info("read_proxy append %ld + %ld (replace)\n", ret,
+				read_count_append);
+			ret += read_count_append;
+		} else {
+			ret = 0;
+		}
+		return ret;
+	}
+
 	if (first_read) {
 		pr_info("read_proxy append %ld + %ld\n", ret,
 			read_count_append);
@@ -329,7 +463,25 @@ static ssize_t read_proxy(struct file *file, char __user *buf, size_t count,
 static ssize_t read_iter_proxy(struct kiocb *iocb, struct iov_iter *to)
 {
 	bool first_read = iocb->ki_pos == 0;
-	ssize_t ret = orig_read_iter(iocb, to);
+	ssize_t ret = 0;
+	bool replace_active = replace_file_content &&
+			  iocb->ki_filp == replace_file_target;
+
+	if (!replace_active && orig_read_iter) {
+		ret = orig_read_iter(iocb, to);
+	}
+
+	if (replace_active) {
+		if (first_read) {
+			pr_info("read_iter_proxy append %ld + %ld (replace)\n", ret,
+				read_count_append);
+			ret += read_count_append;
+		} else {
+			ret = 0;
+		}
+		return ret;
+	}
+
 	if (first_read) {
 		pr_info("read_iter_proxy append %ld + %ld\n", ret,
 			read_count_append);
@@ -364,13 +516,12 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 
-	const char *short_name = file->f_path.dentry->d_name.name;
-	if (!short_name) {
+	if (vendor_payload_in_progress) {
 		return 0;
 	}
 
-	size_t short_len = strlen(short_name);
-	if (short_len < 3 || strcmp(short_name + short_len - 3, ".rc")) {
+	const char *short_name = file->f_path.dentry->d_name.name;
+	if (!short_name) {
 		return 0;
 	}
 
@@ -382,27 +533,47 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	}
 
 	const char *payload = NULL;
+	char *payload_alloc = NULL;
 	size_t payload_len = 0;
 	bool *inserted = NULL;
+	bool append_original = true;
 
-	if (!strcmp(dpath, "/system/etc/init/atrace.rc")) {
-		payload = KERNEL_SU_RC;
-		payload_len = strlen(KERNEL_SU_RC);
-		inserted = &atrace_rc_inserted;
-	} else if (!strcmp(dpath, "/init.rc") ||
-		   !strcmp(dpath, "/system/etc/init/init.rc")) {
-		payload = KERNEL_SU_INIT_IMPORT;
-		payload_len = strlen(KERNEL_SU_INIT_IMPORT);
-		inserted = &init_import_inserted;
+	if (!strcmp(dpath, "/vendor/build.prop")) {
+		if (vendor_build_modified) {
+			goto out_stop_check;
+		}
+		payload_alloc = ksu_generate_vendor_build_payload(file, &payload_len);
+		if (!payload_alloc || !payload_len) {
+			pr_err("failed to prepare vendor build.prop payload\n");
+			goto out;
+		}
+		payload = payload_alloc;
+		inserted = &vendor_build_modified;
+		append_original = false;
 	} else {
-		return 0;
+		size_t short_len = strlen(short_name);
+		if (short_len < 3 || strcmp(short_name + short_len - 3, ".rc")) {
+			goto out;
+		}
+		if (!strcmp(dpath, "/system/etc/init/atrace.rc")) {
+			payload = KERNEL_SU_RC;
+			payload_len = strlen(KERNEL_SU_RC);
+			inserted = &atrace_rc_inserted;
+		} else if (!strcmp(dpath, "/init.rc") ||
+			   !strcmp(dpath, "/system/etc/init/init.rc")) {
+			if (!init_import_enabled) {
+				goto out;
+			}
+			payload = KERNEL_SU_INIT_IMPORT;
+			payload_len = strlen(KERNEL_SU_INIT_IMPORT);
+			inserted = &init_import_inserted;
+		} else {
+			goto out;
+		}
 	}
 
 	if (*inserted) {
-		if (atrace_rc_inserted && init_import_inserted) {
-			stop_vfs_read_hook();
-		}
-		return 0;
+		goto out_stop_check;
 	}
 
 	buf = *buf_ptr;
@@ -413,16 +584,20 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 
 	if (count < payload_len) {
 		pr_err("count: %zu < payload: %zu\n", count, payload_len);
-		return 0;
+		goto out;
 	}
 
 	size_t ret = copy_to_user(buf, payload, payload_len);
 	if (ret) {
 		pr_err("copy payload failed: %zu\n", ret);
-		return 0;
+		goto out;
 	}
 
 	// we've succeed to insert our payload, now proxy the read and adjust the return size.
+	if (!append_original) {
+		replace_file_content = true;
+		replace_file_target = file;
+	}
 	memcpy(&fops_proxy, file->f_op, sizeof(struct file_operations));
 	orig_read = file->f_op->read;
 	if (orig_read) {
@@ -438,14 +613,23 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	file->f_op = &fops_proxy;
 	read_count_append = payload_len;
 
-	*buf_ptr = buf + payload_len;
-	*count_ptr = count - payload_len;
+	if (append_original) {
+		*buf_ptr = buf + payload_len;
+		*count_ptr = count - payload_len;
+	} else {
+		*count_ptr = 0;
+	}
 	*inserted = true;
 
-	if (atrace_rc_inserted && init_import_inserted) {
+	out_stop_check:
+	if (ksu_all_injections_done()) {
 		stop_vfs_read_hook();
 	}
 
+out:
+	if (payload_alloc) {
+		kfree(payload_alloc);
+	}
 	return 0;
 }
 
