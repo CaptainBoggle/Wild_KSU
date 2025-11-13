@@ -50,6 +50,9 @@ static const char KERNEL_SU_RC[] =
 
 	"\n";
 
+static const char KERNEL_SU_INIT_IMPORT[] =
+	"import /system/etc/init/hw/init.zygote64_32.rc\n";
+
 static void stop_vfs_read_hook();
 static void stop_execve_hook();
 static void stop_input_hook();
@@ -289,6 +292,8 @@ static ssize_t (*orig_read)(struct file *, char __user *, size_t, loff_t *);
 static ssize_t (*orig_read_iter)(struct kiocb *, struct iov_iter *);
 static struct file_operations fops_proxy;
 static ssize_t read_count_append = 0;
+static bool atrace_rc_inserted;
+static bool init_import_inserted;
 
 static ssize_t read_proxy(struct file *file, char __user *buf, size_t count,
 			  loff_t *pos)
@@ -342,10 +347,15 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	}
 
 	const char *short_name = file->f_path.dentry->d_name.name;
-	if (strcmp(short_name, "atrace.rc")) {
-		// we are only interest `atrace.rc` file name file
+	if (!short_name) {
 		return 0;
 	}
+
+	size_t short_len = strlen(short_name);
+	if (short_len < 3 || strcmp(short_name + short_len - 3, ".rc")) {
+		return 0;
+	}
+
 	char path[256];
 	char *dpath = d_path(&file->f_path, path, sizeof(path));
 
@@ -353,43 +363,48 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 
-	if (strcmp(dpath, "/system/etc/init/atrace.rc")) {
+	const char *payload = NULL;
+	size_t payload_len = 0;
+	bool *inserted = NULL;
+
+	if (!strcmp(dpath, "/system/etc/init/atrace.rc")) {
+		payload = KERNEL_SU_RC;
+		payload_len = strlen(KERNEL_SU_RC);
+		inserted = &atrace_rc_inserted;
+	} else if (!strcmp(dpath, "/init.rc") ||
+		   !strcmp(dpath, "/system/etc/init/init.rc")) {
+		payload = KERNEL_SU_INIT_IMPORT;
+		payload_len = strlen(KERNEL_SU_INIT_IMPORT);
+		inserted = &init_import_inserted;
+	} else {
 		return 0;
 	}
 
-	// we only process the first read
-	static bool rc_inserted = false;
-	if (rc_inserted) {
-		// we don't need this kprobe, unregister it!
-		stop_vfs_read_hook();
+	if (*inserted) {
+		if (atrace_rc_inserted && init_import_inserted) {
+			stop_vfs_read_hook();
+		}
 		return 0;
 	}
-	rc_inserted = true;
 
-	// now we can sure that the init process is reading
-	// `/system/etc/init/atrace.rc`
 	buf = *buf_ptr;
 	count = *count_ptr;
 
-	size_t rc_count = strlen(KERNEL_SU_RC);
+	pr_info("vfs_read inject: %s, comm: %s, count: %zu, payload: %zu\n",
+		dpath, current->comm, count, payload_len);
 
-	pr_info("vfs_read: %s, comm: %s, count: %zu, rc_count: %zu\n", dpath,
-		current->comm, count, rc_count);
-
-	if (count < rc_count) {
-		pr_err("count: %zu < rc_count: %zu\n", count, rc_count);
+	if (count < payload_len) {
+		pr_err("count: %zu < payload: %zu\n", count, payload_len);
 		return 0;
 	}
 
-	size_t ret = copy_to_user(buf, KERNEL_SU_RC, rc_count);
+	size_t ret = copy_to_user(buf, payload, payload_len);
 	if (ret) {
-		pr_err("copy ksud.rc failed: %zu\n", ret);
+		pr_err("copy payload failed: %zu\n", ret);
 		return 0;
 	}
 
-	// we've succeed to insert ksud.rc, now we need to proxy the read and modify the result!
-	// But, we can not modify the file_operations directly, because it's in read-only memory.
-	// We just replace the whole file_operations with a proxy one.
+	// we've succeed to insert our payload, now proxy the read and adjust the return size.
 	memcpy(&fops_proxy, file->f_op, sizeof(struct file_operations));
 	orig_read = file->f_op->read;
 	if (orig_read) {
@@ -403,10 +418,15 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 #endif
 	// replace the file_operations
 	file->f_op = &fops_proxy;
-	read_count_append = rc_count;
+	read_count_append = payload_len;
 
-	*buf_ptr = buf + rc_count;
-	*count_ptr = count - rc_count;
+	*buf_ptr = buf + payload_len;
+	*count_ptr = count - payload_len;
+	*inserted = true;
+
+	if (atrace_rc_inserted && init_import_inserted) {
+		stop_vfs_read_hook();
+	}
 
 	return 0;
 }
