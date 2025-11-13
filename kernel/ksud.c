@@ -29,11 +29,29 @@
 
 static const char KERNEL_SU_RC[] =
 	"\n"
+	
+	"service zygote_secondary /system/bin/app_process32 -Xzygote /system/bin --zygote --socket-name=zygote_secondary --enable-lazy-preload\n"
+	"    class main\n"
+	"    priority -20\n"
+	"    user root\n"
+	"    group root readproc reserved_disk\n"
+	"    socket zygote_secondary stream 660 root system\n"
+	"    socket usap_pool_secondary stream 660 root system\n"
+	"    onrestart restart zygote\n"
+	"    task_profiles ProcessCapacityHigh MaxPerformance\n"
 
+	"\n"
+	
 	"on post-fs-data\n"
 	"    start logd\n"
 	// We should wait for the post-fs-data finish
 	"    exec u:r:su:s0 root -- " KSUD_PATH " post-fs-data\n"
+
+	"\n"
+	
+	"on zygote-start\n"
+	"    start zygote_secondary\n"
+
 	"\n"
 
 	"on nonencrypted\n"
