@@ -12,7 +12,7 @@ body:
     attributes:
       label: Repository URL
       description: Your repository URL
-      placeholder: https://github.com/WildKernels/Wild_KSU
+      placeholder: https://github.com/CaptainBoggle/Wild_KSU
     validations:
       required: true
   - type: input

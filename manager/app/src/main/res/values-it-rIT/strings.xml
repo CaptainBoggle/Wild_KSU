@@ -5,7 +5,7 @@
     <string name="issue_report_body_2">Segnalalo il prima possibile!</string>
     <string name="issue_report_github">Segnala su GitHub</string>
     <string name="issue_report_telegram">Contatta via Telegram</string>
-    <string name="issue_report_github_link">https://github.com/WildKernels/Wild_KSU/issues</string>
+    <string name="issue_report_github_link">https://github.com/CaptainBoggle/Wild_KSU/issues</string>
     <string name="issue_report_telegram_link">https://t.me/WildKernels/2</string>
     <string name="confirm">Conferma</string>
     <string name="home">Home</string>
@@ -283,4 +283,4 @@
     <string name="individual_app_cards">Schede App Individuali</string>
     <string name="individual_app_cards_summary">Mostra ogni app nella propria scheda invece che in un elenco</string>
 </resources>
-
+

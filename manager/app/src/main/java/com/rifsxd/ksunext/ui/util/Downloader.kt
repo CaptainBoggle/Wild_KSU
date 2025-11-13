@@ -65,7 +65,7 @@ fun download(
 
 fun checkNewVersion(): LatestVersionInfo {
     // Wild KSU version updates
-    val url = "https://api.github.com/repos/WildKernels/Wild_KSU/releases/latest"
+    val url = "https://api.github.com/repos/CaptainBoggle/Wild_KSU/releases/latest"
     // default null value if failed
     val defaultValue = LatestVersionInfo()
     

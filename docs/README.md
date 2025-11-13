@@ -8,10 +8,10 @@
   > ⚠️ **IMPORTANT NOTICE**: This project is currently in testing mode. All releases should be considered unstable and may be unstable until version 1.0.0 is released. Use at your own risk.
   
   <p align="center">
-    <a href="https://github.com/WildKernels/Wild_KSU/releases/latest">
-      <img src="https://img.shields.io/github/v/release/WildKernels/Wild_KSU?label=Release&logo=github&style=for-the-badge&color=blue" alt="Latest Release">
+    <a href="https://github.com/CaptainBoggle/Wild_KSU/releases/latest">
+      <img src="https://img.shields.io/github/v/release/CaptainBoggle/Wild_KSU?label=Release&logo=github&style=for-the-badge&color=blue" alt="Latest Release">
     </a>
-    <a href="https://nightly.link/WildKernels/Wild_KSU/workflows/build-manager-ci/wild/Manager">
+    <a href="https://nightly.link/CaptainBoggle/Wild_KSU/workflows/build-manager-ci/wild/Manager">
       <img src="https://img.shields.io/badge/Nightly-Build-purple?logo=hackthebox&logoColor=fff&style=for-the-badge" alt="Nightly Build">
     </a>
   </p>
@@ -73,7 +73,7 @@ These two modes are suitable for different scenarios, and you can choose the one
 > Use our automated setup script to integrate Wild KSU into your kernel source:
 
 ```bash
-curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -s wild
+curl -LSs "https://raw.githubusercontent.com/CaptainBoggle/Wild_KSU/wild/kernel/setup.sh" | bash -s wild
 ```
 
 > 📋 **Note:** This script will automatically configure your kernel source tree with Wild KSU support.
@@ -183,9 +183,9 @@ Wild KSU stands on the shoulders of giants. We extend our gratitude to:
   
   ---
   
-  [![GitHub stars](https://img.shields.io/github/stars/WildKernels/Wild_KSU?style=social)](https://github.com/WildKernels/Wild_KSU/stargazers)
-  [![GitHub forks](https://img.shields.io/github/forks/WildKernels/Wild_KSU?style=social)](https://github.com/WildKernels/Wild_KSU/network/members)
-  [![GitHub watchers](https://img.shields.io/github/watchers/WildKernels/Wild_KSU?style=social)](https://github.com/WildKernels/Wild_KSU/watchers)
+  [![GitHub stars](https://img.shields.io/github/stars/CaptainBoggle/Wild_KSU?style=social)](https://github.com/CaptainBoggle/Wild_KSU/stargazers)
+  [![GitHub forks](https://img.shields.io/github/forks/CaptainBoggle/Wild_KSU?style=social)](https://github.com/CaptainBoggle/Wild_KSU/network/members)
+  [![GitHub watchers](https://img.shields.io/github/watchers/CaptainBoggle/Wild_KSU?style=social)](https://github.com/CaptainBoggle/Wild_KSU/watchers)
   
   ![Stats](../assets/gray0_ctp_on_line.svg)
   
