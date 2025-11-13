@@ -19,6 +19,7 @@
 #include <linux/printk.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 #include <linux/sizes.h>
@@ -320,7 +321,27 @@ static bool vendor_build_modified;
 static bool replace_file_content;
 static struct file *replace_file_target;
 static bool vendor_payload_in_progress;
-static bool init_import_enabled = true;
+static bool init_import_enabled = false;
+static char *vendor_payload_data;
+static size_t vendor_payload_len;
+static size_t vendor_payload_pos;
+
+static bool ksu_is_target_comm(const char *comm)
+{
+	static const char *const allowed[] = {
+		"init",
+		"property_service",
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(allowed); ++i) {
+		if (!strcmp(comm, allowed[i])) {
+			return true;
+		}
+	}
+
+	return false;
+}
 
 static bool ksu_line_has_prefix(const char *line, size_t len,
 				    const char *prefix)
@@ -462,12 +483,26 @@ static ssize_t read_proxy(struct file *file, char __user *buf, size_t count,
 	}
 
 	if (replace_active) {
-		if (first_read) {
-			pr_info("read_proxy append %ld + %ld (replace)\n", ret,
-				read_count_append);
-			ret += read_count_append;
+		size_t remaining = vendor_payload_len - vendor_payload_pos;
+		size_t chunk = min_t(size_t, count, remaining);
+		if (chunk) {
+			if (copy_to_user(buf, vendor_payload_data + vendor_payload_pos,
+				     chunk)) {
+				return -EFAULT;
+			}
+			vendor_payload_pos += chunk;
+			file->f_pos += chunk;
+			ret = chunk;
 		} else {
 			ret = 0;
+		}
+		if (vendor_payload_pos >= vendor_payload_len) {
+			replace_file_content = false;
+			replace_file_target = NULL;
+			kfree(vendor_payload_data);
+			vendor_payload_data = NULL;
+			vendor_payload_len = 0;
+			vendor_payload_pos = 0;
 		}
 		return ret;
 	}
@@ -492,12 +527,26 @@ static ssize_t read_iter_proxy(struct kiocb *iocb, struct iov_iter *to)
 	}
 
 	if (replace_active) {
-		if (first_read) {
-			pr_info("read_iter_proxy append %ld + %ld (replace)\n", ret,
-				read_count_append);
-			ret += read_count_append;
+		size_t remaining = vendor_payload_len - vendor_payload_pos;
+		size_t chunk = min_t(size_t, iov_iter_count(to), remaining);
+		if (chunk) {
+			if (copy_to_iter(vendor_payload_data + vendor_payload_pos, chunk,
+				        to) != chunk) {
+				return -EFAULT;
+			}
+			vendor_payload_pos += chunk;
+			iocb->ki_pos += chunk;
+			ret = chunk;
 		} else {
 			ret = 0;
+		}
+		if (vendor_payload_pos >= vendor_payload_len) {
+			replace_file_content = false;
+			replace_file_target = NULL;
+			kfree(vendor_payload_data);
+			vendor_payload_data = NULL;
+			vendor_payload_len = 0;
+			vendor_payload_pos = 0;
 		}
 		return ret;
 	}
@@ -522,8 +571,8 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	char __user *buf;
 	size_t count;
 
-	if (strcmp(current->comm, "init")) {
-		// we are only interest in `init` process
+	if (!ksu_is_target_comm(current->comm)) {
+		// only care about init/property_service style readers
 		return 0;
 	}
 
@@ -569,7 +618,10 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 			pr_err("failed to prepare vendor build.prop payload\n");
 			goto out;
 		}
-		payload = payload_alloc;
+		vendor_payload_data = payload_alloc;
+		vendor_payload_len = payload_len;
+		vendor_payload_pos = 0;
+		payload_alloc = NULL;
 		inserted = &vendor_build_modified;
 		append_original = false;
 	} else {
@@ -605,14 +657,19 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		dpath, current->comm, count, payload_len);
 
 	if (count < payload_len) {
-		pr_err("count: %zu < payload: %zu\n", count, payload_len);
-		goto out;
+		if (append_original) {
+			pr_err("count: %zu < payload: %zu\n", count, payload_len);
+			goto out;
+		}
 	}
 
-	size_t ret = copy_to_user(buf, payload, payload_len);
-	if (ret) {
-		pr_err("copy payload failed: %zu\n", ret);
-		goto out;
+	size_t ret = 0;
+	if (append_original) {
+		ret = copy_to_user(buf, payload, payload_len);
+		if (ret) {
+			pr_err("copy payload failed: %zu\n", ret);
+			goto out;
+		}
 	}
 
 	// we've succeed to insert our payload, now proxy the read and adjust the return size.
@@ -633,13 +690,11 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 #endif
 	// replace the file_operations
 	file->f_op = &fops_proxy;
-	read_count_append = payload_len;
+	read_count_append = append_original ? payload_len : 0;
 
 	if (append_original) {
 		*buf_ptr = buf + payload_len;
 		*count_ptr = count - payload_len;
-	} else {
-		*count_ptr = 0;
 	}
 	*inserted = true;
 
@@ -904,6 +959,14 @@ bool is_ksu_transition(const struct task_security_struct *old_tsec,
 
 static void stop_vfs_read_hook()
 {
+	if (vendor_payload_data) {
+		kfree(vendor_payload_data);
+		vendor_payload_data = NULL;
+		vendor_payload_len = 0;
+		vendor_payload_pos = 0;
+	}
+	replace_file_content = false;
+	replace_file_target = NULL;
 #ifdef CONFIG_KSU_KPROBES_HOOK
 	bool ret = schedule_work(&stop_vfs_read_work);
 	pr_info("unregister vfs_read kprobe: %d!\n", ret);
