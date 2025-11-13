@@ -15,6 +15,7 @@
 #include <linux/aio.h>
 #endif
 #include <linux/kprobes.h>
+#include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/types.h>
 #include <linux/uaccess.h>
@@ -319,7 +320,7 @@ static bool vendor_build_modified;
 static bool replace_file_content;
 static struct file *replace_file_target;
 static bool vendor_payload_in_progress;
-static bool init_import_enabled = false;
+static bool init_import_enabled = true;
 
 static bool ksu_line_has_prefix(const char *line, size_t len,
 				    const char *prefix)
@@ -329,6 +330,25 @@ static bool ksu_line_has_prefix(const char *line, size_t len,
 		return false;
 	}
 	return !strncmp(line, prefix, prefix_len);
+}
+
+static bool ksu_is_vendor_build_path(const char *path)
+{
+	static const char *const candidates[] = {
+		"/vendor/build.prop",
+		"/vendor/etc/build.prop",
+		"/mnt/vendor/build.prop",
+		"/mnt/vendor/etc/build.prop",
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(candidates); ++i) {
+		if (!strcmp(path, candidates[i])) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static char *ksu_generate_vendor_build_payload(struct file *file,
@@ -538,10 +558,12 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 	bool *inserted = NULL;
 	bool append_original = true;
 
-	if (!strcmp(dpath, "/vendor/build.prop")) {
+	if (ksu_is_vendor_build_path(dpath)) {
 		if (vendor_build_modified) {
+			pr_info("vendor build already handled: %s\n", dpath);
 			goto out_stop_check;
 		}
+		pr_info("intercept vendor build: %s\n", dpath);
 		payload_alloc = ksu_generate_vendor_build_payload(file, &payload_len);
 		if (!payload_alloc || !payload_len) {
 			pr_err("failed to prepare vendor build.prop payload\n");
