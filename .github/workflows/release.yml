@@ -9,12 +9,6 @@ jobs:
   build-manager:
     uses: ./.github/workflows/build-manager.yml
     secrets: inherit
-  build-a12-kernel:
-    uses: ./.github/workflows/build-kernel-a12.yml
-    secrets: inherit
-  build-a13-kernel:
-    uses: ./.github/workflows/build-kernel-a13.yml
-    secrets: inherit
   build-a14-kernel:
     uses: ./.github/workflows/build-kernel-a14.yml
     secrets: inherit
@@ -24,8 +18,6 @@ jobs:
   release:
     needs:
       - build-manager
-      - build-a12-kernel
-      - build-a13-kernel
       - build-a14-kernel
       - build-a15-kernel
     runs-on: ubuntu-latest
