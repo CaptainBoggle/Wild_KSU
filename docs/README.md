@@ -1,8 +1,18 @@
 <div align="center">
   <img src="../assets/wksu.png" width="120" alt="Wild KSU Logo">
   
-  # Wild KSU
+  # Wild KSU Zygote64_32
   
+
+  ### IMPORTANT: This is a fork of Wild KSU with the goal of enabling 32-bit apps to run on devices that have the capability but have it disabled by default in the ROM, such as the Pixel 7/7 Pro. This is essentially untested and may cause bootloops. 
+
+Credit to @TheWildJames for the original Wild KSU project, @Namelesswonder for Magisk Zygote64_32, and all the people that they credit themselves.
+
+The original README follows below.
+
+---
+
+
   **🔥 A customization and root hiding focused fork 🔥**
   
   > ⚠️ **IMPORTANT NOTICE**: This project is currently in testing mode. All releases should be considered unstable and may be unstable until version 1.0.0 is released. Use at your own risk.
